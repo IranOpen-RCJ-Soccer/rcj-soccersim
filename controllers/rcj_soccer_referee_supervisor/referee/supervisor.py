@@ -46,7 +46,9 @@ class RCJSoccerSupervisor(Supervisor):
             self.robot_reset_physics[robot] = 0
 
     def check_reset_physics_counters(self):
-        # HACK(Richo): Workaround for the following issue
+        # WORKAROUND for the following Webots relocation bug: one physics
+        # step can still use the old articulated-body/contact state after a
+        # supervisor teleport. Repeat resetPhysics() on the next tick.
         # https://github.com/RoboCupJuniorTC/rcj-soccersim/issues/130
         for robot in ROBOT_NAMES:
             reset_physics_counter = self.robot_reset_physics[robot]
@@ -93,11 +95,48 @@ class RCJSoccerSupervisor(Supervisor):
             robot_name (str): The robot we are moving
             position (list of floats): The actual position
         """
+        # WORKAROUND for the Webots relocation bug: teleporting a moving
+        # articulated robot can preserve its momentum/contact impulse and
+        # make it push or flip another robot. Clear motion before changing
+        # the translation and reset physics immediately afterwards.
+        self.reset_robot_velocity(robot_name)
+
         tr_field = self.robot_translation_fields[robot_name]
         tr_field.setSFVec3f(position)
         self.robot_reset_physics[robot_name] = 1
         self.robot_nodes[robot_name].resetPhysics()
         self.robot_translation[robot_name] = position
+
+    def set_robot_pose(
+        self,
+        robot_name: str,
+        position: List[float],
+        rotation: List[float],
+    ):
+        """Teleport a robot to an upright pose and reset its physics.
+
+        Translation and rotation must be changed before resetPhysics() so the
+        physics engine receives the complete replacement pose.  A second
+        resetPhysics() is scheduled for the next supervisor tick because
+        Webots can otherwise retain the old articulated-body state for one
+        step after a relocation.
+        """
+        # WORKAROUND for the Webots relocation bug: a robot may still have
+        # linear/angular motion when its fields are changed. Zero it first
+        # so the physics solver cannot carry the old collision impulse into
+        # the new pose.
+        self.reset_robot_velocity(robot_name)
+
+        self.robot_translation_fields[robot_name].setSFVec3f(position)
+        self.robot_rotation_fields[robot_name].setSFRotation(rotation)
+
+        # Set both fields before resetPhysics() so Webots receives one
+        # complete upright pose instead of briefly solving a half-updated
+        # pose that can leave the robot sideways or upside down.
+        self.robot_reset_physics[robot_name] = 1
+        self.robot_nodes[robot_name].resetPhysics()
+        self.robot_translation[robot_name] = position
+        self.robot_rotation[robot_name] = rotation
 
     def set_robot_rotation(self, robot_name: str, rotation: List[float]):
         """Set the rotation of a robot.
@@ -212,9 +251,13 @@ class RCJSoccerSupervisor(Supervisor):
         if object_name == "ball":
             self.set_ball_position([x, y, BALL_DEPTH])
         else:
-            self.set_robot_position(object_name, [x, y, OBJECT_DEPTH])
-            self.set_robot_rotation(
-                object_name, ROBOT_INITIAL_ROTATION[object_name]
+            # Penalty-area and lack-of-progress relocations must use the
+            # complete pose workaround; position-only moves can leave old
+            # velocity and collision state active during the teleport.
+            self.set_robot_pose(
+                object_name,
+                [x, y, OBJECT_DEPTH],
+                ROBOT_INITIAL_ROTATION[object_name],
             )
 
     def emit_data(self, data: str):

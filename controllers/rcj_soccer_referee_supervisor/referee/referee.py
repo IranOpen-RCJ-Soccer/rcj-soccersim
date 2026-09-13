@@ -171,14 +171,15 @@ class RCJSoccerReferee:
         Args:
             robot_name (str): The robot to reset the position for
         """
-        self.sv.reset_robot_velocity(robot_name)
-
         translation = ROBOT_INITIAL_TRANSLATION[robot_name].copy()
         translation = self._add_initial_position_noise(translation)
 
-        self.sv.set_robot_position(robot_name, translation)
-        self.sv.set_robot_rotation(
-            robot_name, ROBOT_INITIAL_ROTATION[robot_name]
+        # Use the atomic relocation workaround so goal resets do not carry
+        # the robot's previous motion/contact impulse into the new kickoff.
+        self.sv.set_robot_pose(
+            robot_name,
+            translation,
+            ROBOT_INITIAL_ROTATION[robot_name],
         )
 
         self.reset_checkers(robot_name)
@@ -208,8 +209,13 @@ class RCJSoccerReferee:
         # Always kickoff with the third robot
         robot = f"{team}3"
 
-        self.sv.set_robot_position(robot, KICKOFF_TRANSLATION[team])
-        self.sv.set_robot_rotation(robot, ROBOT_INITIAL_ROTATION[robot])
+        # Kickoff is also a teleport; use the same velocity/pose/physics
+        # reset workaround as penalty-area and progress relocations.
+        self.sv.set_robot_pose(
+            robot,
+            KICKOFF_TRANSLATION[team],
+            ROBOT_INITIAL_ROTATION[robot],
+        )
 
         return robot
 
